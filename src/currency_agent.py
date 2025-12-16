@@ -1,99 +1,82 @@
+# src/currency_agent.py
+from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Optional, Tuple
-from .fx_provider import FrankfurterProvider  # ✅ nombre correcto
+from typing import Optional, Tuple, List
 
-# ✅ Lista de monedas ISO que vamos a soportar
-CURRENCIES = [
-    'USD', 'AUD', 'EUR', 'GBP',
-    'ARS', 'BRL', 'CLP', 'COP', 'MXN', 'PEN'
+from .fx_provider import FrankfurterProvider
+
+
+SUPPORTED_CODES = [
+    "USD", "AUD", "EUR", "GBP",
+    "ARS", "BRL", "CLP", "COP",
+    "MXN", "PEN",
 ]
 
-# ✅ Alias en español (singular/plural y variantes acentuadas) → código ISO
-ALIASES = {
-    # USD
-    'dolares': 'USD', 'dólares': 'USD', 'dólar': 'USD', 'dolar': 'USD',
-    'dólares americanos': 'USD', 'dolares americanos': 'USD',
-    'usd': 'USD', 'dolares us': 'USD', 'dólares us': 'USD',
-
-    # AUD
-    'dolares australianos': 'AUD', 'dólares australianos': 'AUD',
-    'dolar australiano': 'AUD', 'dólar australiano': 'AUD', 'aud': 'AUD',
-
-    # EUR
-    'euros': 'EUR', 'euro': 'EUR', 'eur': 'EUR',
-
-    # GBP
-    'libras esterlinas': 'GBP', 'libra esterlina': 'GBP', 'gbp': 'GBP', 'libras': 'GBP',
-
-    # ARS
-    'pesos argentinos': 'ARS', 'peso argentino': 'ARS', 'ars': 'ARS',
-
-    # BRL
-    'reales brasileños': 'BRL', 'real brasileño': 'BRL', 'brl': 'BRL', 'reales': 'BRL',
-
-    # CLP
-    'pesos chilenos': 'CLP', 'peso chileno': 'CLP', 'clp': 'CLP',
-
-    # COP
-    'pesos colombianos': 'COP', 'peso colombiano': 'COP', 'cop': 'COP', 'pesos': 'COP',
-
-    # MXN
-    'pesos mexicanos': 'MXN', 'peso mexicano': 'MXN', 'mxn': 'MXN',
-
-    # PEN
-    'soles peruanos': 'PEN', 'sol peruano': 'PEN', 'pen': 'PEN', 'soles': 'PEN'
-}
-
-def _normalize_amount(raw: str) -> float:
-    """Normaliza montos con separadores ES/US.
-    Ejemplos: '10,000' -> 10000; '1.234,56' -> 1234.56; '2.50' -> 2.50
-    """
-    if ',' in raw and '.' not in raw:
-        raw = raw.replace(',', '')
-    elif ',' in raw and '.' in raw:
-        raw = raw.replace('.', '').replace(',', '.')
-    return float(raw)
 
 class Parser:
-    """Extrae monto y monedas desde una pregunta en español."""
+    """
+    Parser sencillo en español que:
+    - Extrae monto numérico
+    - Detecta monedas origen/destino
+    - Decide si es pregunta de conversión (tool) o conceptual (sin tool)
+    """
 
-    def parse(self, text: str) -> Optional[Tuple[float, str, str]]:
-        q = text.lower()
-
-        # 1) Monto
-        m = re.search(r'([\d\.,]+)', q)
+    def _find_amount(self, text: str) -> Optional[float]:
+        # Acepta formatos como "10,000", "1.000,50", "500"
+        m = re.search(r"(\d[\d\.\,]*)", text)
         if not m:
             return None
-        amount = _normalize_amount(m.group(1))
+        raw = m.group(1).replace(".", "").replace(",", ".")
+        try:
+            return float(raw)
+        except ValueError:
+            return None
 
-        # 2) Recolectar códigos ISO y alias en orden de aparición
+    def _find_currency_codes(self, text: str) -> List[str]:
+        # Busca códigos tipo USD, COP, EUR, etc. sin distinguir mayúsculas
         codes = []
-        for code in [c.lower() for c in CURRENCIES]:
-            for mt in re.finditer(rf'\b{code}\b', q):
-                codes.append((mt.start(), code.upper()))
-        for alias, code in ALIASES.items():
-            for mt in re.finditer(alias, q):
-                codes.append((mt.start(), code.upper()))
-        codes = [c for _, c in sorted(codes, key=lambda x: x[0])]
+        up = text.upper()
+        for code in SUPPORTED_CODES:
+            if code in up:
+                codes.append(code)
+        return list(dict.fromkeys(codes))  # sin duplicados, preserva orden
 
-        # 3) Destino por preposición "en|a <code>" (ahora incluye todos los codes del catálogo)
-        #    Nota: usamos un grupo con las monedas soportadas en minúscula.
-        dest_pattern = r'(?:en|a)\s+(usd|aud|eur|gbp|ars|brl|clp|cop|mxn|pen)'
-        m3 = re.search(dest_pattern, q)
-        to_code = m3.group(1).upper() if m3 else None
+    def parse(self, question: str) -> Optional[Tuple[float, str, str]]:
+        """
+        Devuelve (amount, from_code, to_code) si es consulta de conversión.
+        Si no puede interpretar la pregunta como conversión, devuelve None.
+        """
+        q = question.lower()
 
-        if to_code and codes:
-            from_code = next((c for c in codes if c != to_code), None)
-            if from_code:
-                return amount, from_code, to_code
+        amount = self._find_amount(q)
+        if amount is None:
+            return None
 
-        # 4) Fallback: si detectamos >=2 monedas, tomamos la primera como origen y la segunda como destino
+        codes = self._find_currency_codes(q)
         if len(codes) >= 2:
+            # Tenemos al menos 2 monedas explícitas, primera = origen, segunda = destino
             return amount, codes[0], codes[1]
 
+        # Si solo hay una moneda explícita, intentamos detectar dirección con patrones
+        if len(codes) == 1:
+            only = codes[0]
+
+            # ¿Cuánto equivalen 500 EUR en COP?
+            dest_pattern = r"(?:en|a)\s+(usd|aud|eur|gbp|ars|brl|clp|cop|mxn|pen)"
+            m_dest = re.search(dest_pattern, q)
+            if m_dest:
+                to_code = m_dest.group(1).upper()
+                if to_code == only:
+                    # Solo detectamos una moneda distinta, no sabemos la otra
+                    return None
+                # asumimos que la moneda mencionada primero es origen
+                return amount, only, to_code
+
+        # Si llegamos aquí, no interpretamos la pregunta como conversión
         return None
+
 
 @dataclass
 class CurrencyAgent:
@@ -102,11 +85,29 @@ class CurrencyAgent:
 
     def answer(self, question: str) -> str:
         parsed = self.parser.parse(question)
+
+        # Si el parser entiende que es una conversión, llamamos a la "tool"
         if parsed:
-            amount, f, t = parsed
-            # ✅ llamada correcta al método del provider
-            converted = self.provider.convert(amount, f, t)
-            return f"{amount:,.2f} {f} ≈ {converted:,.2f} {t}"
-        else:
-            return ("La tasa de cambio es el precio de una moneda expresado en otra; ")
-                   
+            amount, from_code, to_code = parsed
+            try:
+                converted = self.provider.convert(amount, from_code, to_code)
+            except Exception as e:
+                return (
+                    f"No pude obtener la tasa de cambio para {from_code}->{to_code}. "
+                    f"Detalle técnico: {e}"
+                )
+
+            return (
+                f"{amount:,.2f} {from_code} ≈ {converted:,.2f} {to_code} "
+                f"(tasa de cambio en tiempo casi real del BCE)."
+            )
+
+        # Si no es conversión (Pregunta 3), respondemos de forma conceptual
+        return (
+            "La tasa de cambio es el precio de una moneda expresado en otra. "
+            "Es clave en transacciones internacionales porque determina el valor "
+            "real de pagos, inversiones y deudas cuando las partes operan en "
+            "monedas diferentes; en energía y recursos ayuda a gestionar el "
+            "riesgo de que los ingresos estén en moneda local mientras la deuda "
+            "y los contratos de suministro estén en divisas fuertes como USD o EUR."
+        )
