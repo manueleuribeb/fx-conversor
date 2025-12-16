@@ -57,4 +57,5 @@ class FrankfurterProvider:
         return amount * rate
 
     def latest_with_meta(self, base: str, symbols: List[str]) -> Dict:
-        """Devuelve el JSON completo por si quieres mostrar 'date'        """Devuelve el JSON completo por si quieres mostrar 'date' (disclaimer)."""
+        """Devuelve el JSON completo por si quieres mostrar 'date' (disclaimer)"""
+        
