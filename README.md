@@ -3,10 +3,10 @@
 Aplicación de demo que muestra cómo un agente en Python decide de forma dinámica cuándo llamar a herramientas externas (tools) para responder preguntas en lenguaje natural en el contexto BFSI del sector de energía y recursos.
 
 ## Cómo Ejecutar
-- python3 -m venv .venv
-- source .venv/bin/activate
-- pip install -r requirements.txt
-- python app.py
+- `python3 -m venv .venv`
+- `source .venv/bin/activate`
+- `pip install -r requirements.txt`
+- `python app.py`
 
 ## Contexto y Motivación
 
